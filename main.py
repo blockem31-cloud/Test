@@ -1,530 +1,905 @@
+import os
 import secrets
 import string
-import webbrowser
-import os
+import uuid
+import json
 from datetime import datetime
+from flask import Flask, render_template_string, jsonify, request
 
-class StreamKeyWebsite:
-    def __init__(self):
-        self.html_content = ""
-        
-    def generate_stream_key(self, platform="twitch", length=30):
+# Flask App initialisieren
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
+
+# In-Memory Speicher
+streams = {}
+stream_keys = {}
+active_viewers = {}
+
+class StreamHub:
+    @staticmethod
+    def generate_stream_key(username="anonymous", length=32):
         """Generiert einen sicheren Stream-Key"""
-        alphabet = string.ascii_letters + string.digits
-        stream_key = ''.join(secrets.choice(alphabet) for _ in range(length))
+        random_part = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(length))
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        stream_key = f"stream_{username}_{timestamp}_{random_part}"
         
-        platforms = {
-            "twitch": "live_",
-            "youtube": "yt_",
-            "facebook": "fb_",
-            "custom": "stream_"
+        stream_id = str(uuid.uuid4())[:8]
+        
+        stream_data = {
+            "id": stream_id,
+            "username": username,
+            "created": datetime.now().strftime("%d.%m.%Y %H:%M"),
+            "active": False,
+            "viewers": 0,
+            "title": f"{username}'s Stream",
+            "category": "Just Chatting",
+            "key": stream_key
         }
         
-        prefix = platforms.get(platform.lower(), "stream_")
-        return prefix + stream_key
+        stream_keys[stream_key] = stream_data
+        streams[stream_id] = stream_data
+        
+        return stream_key, stream_id
     
-    def create_html(self):
-        """Erstellt das HTML für die Website"""
-        
-        # Generiere Beispiel-Keys
-        twitch_key = self.generate_stream_key("twitch")
-        youtube_key = self.generate_stream_key("youtube")
-        facebook_key = self.generate_stream_key("facebook")
-        
-        self.html_content = f'''<!DOCTYPE html>
+    @staticmethod
+    def get_rtmp_url():
+        railway_url = os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'localhost')
+        return f"rtmp://{railway_url}/live"
+
+# HTML Template (All-in-One)
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
 <html lang="de">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>StreamMaster Pro - Key Generator & OBS Guide</title>
+    <title>StreamHub - Anonyme Streaming-Plattform</title>
     <style>
-        * {{
+        * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-        }}
+        }
 
-        body {{
+        body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }}
-
-        .container {{
-            max-width: 1200px;
-            margin: 0 auto;
-        }}
-
-        .header {{
-            text-align: center;
+            background: linear-gradient(135deg, #141414, #1a1a1a);
             color: white;
-            padding: 40px 20px;
-        }}
+            min-height: 100vh;
+        }
 
-        .header h1 {{
-            font-size: 3em;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-        }}
+        .navbar {
+            background: rgba(0,0,0,0.9);
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #ff3366;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
 
-        .header p {{
-            font-size: 1.2em;
-            opacity: 0.9;
-        }}
+        .logo {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #ff3366;
+            text-decoration: none;
+        }
 
-        .generator-box {{
-            background: white;
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            margin-left: 25px;
+            padding: 8px 15px;
+            border-radius: 20px;
+            transition: all 0.3s;
+        }
+
+        .nav-links a:hover {
+            background: #ff3366;
+        }
+
+        .nav-links .live-badge {
+            background: #ff3366;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .hero {
+            background: linear-gradient(45deg, #ff3366, #ff8c00);
             border-radius: 20px;
             padding: 40px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            margin-bottom: 30px;
-        }}
-
-        .key-display {{
-            background: linear-gradient(45deg, #f3f3f3, #e9e9e9);
-            padding: 30px;
-            border-radius: 15px;
-            text-align: center;
             margin: 30px 0;
-        }}
+            text-align: center;
+        }
 
-        .key-box {{
-            background: #2c3e50;
+        .hero h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+        }
+
+        .server-info {
+            background: rgba(0,0,0,0.3);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            font-size: 1.1em;
+        }
+
+        .server-info code {
+            background: #333;
+            padding: 5px 10px;
+            border-radius: 5px;
+            color: #00ff88;
+            margin: 0 10px;
+        }
+
+        .copy-btn-small {
+            background: #ff3366;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.95);
+            z-index: 1000;
+        }
+
+        .modal-content {
+            position: relative;
+            width: 90%;
+            max-width: 600px;
+            margin: 50px auto;
+            background: #1a1a1a;
+            border-radius: 20px;
+            padding: 30px;
+            border: 1px solid #ff3366;
+        }
+
+        .close {
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            font-size: 2em;
+            color: #ff3366;
+            cursor: pointer;
+        }
+
+        .form-group {
+            margin: 20px 0;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #ff3366;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 12px;
+            background: #333;
+            border: 1px solid #444;
+            border-radius: 8px;
+            color: white;
+            font-size: 1em;
+        }
+
+        .generate-btn {
+            width: 100%;
+            padding: 15px;
+            background: #ff3366;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.2em;
+            cursor: pointer;
+            margin: 20px 0;
+        }
+
+        .generate-btn:hover {
+            background: #ff1a4f;
+            transform: translateY(-2px);
+        }
+
+        .key-result {
+            margin-top: 30px;
+            padding: 20px;
+            background: #333;
+            border-radius: 10px;
+        }
+
+        .key-box {
+            background: #1a1a1a;
             color: #00ff88;
             font-family: 'Courier New', monospace;
-            font-size: 1.5em;
-            padding: 20px;
-            border-radius: 10px;
-            letter-spacing: 2px;
+            font-size: 1.1em;
+            padding: 15px;
+            border-radius: 8px;
             word-break: break-all;
-            border: 3px solid #34495e;
             margin: 15px 0;
-        }}
+            border: 1px solid #ff3366;
+        }
 
-        .copy-btn {{
+        .copy-btn {
             background: #00ff88;
-            color: #2c3e50;
+            color: #1a1a1a;
             border: none;
-            padding: 15px 40px;
-            font-size: 1.2em;
-            border-radius: 50px;
+            padding: 10px 20px;
+            border-radius: 5px;
             cursor: pointer;
             font-weight: bold;
-            transition: all 0.3s;
-            box-shadow: 0 5px 15px rgba(0,255,136,0.3);
-        }}
+        }
 
-        .copy-btn:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(0,255,136,0.4);
-        }}
+        .obs-info {
+            margin: 20px 0;
+            padding: 15px;
+            background: #222;
+            border-radius: 8px;
+        }
 
-        .platform-grid {{
+        .obs-info code {
+            background: #1a1a1a;
+            color: #ff3366;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+
+        .start-stream-btn {
+            width: 100%;
+            padding: 15px;
+            background: #00ff88;
+            color: #1a1a1a;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.2em;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .section-title {
+            margin: 40px 0 20px;
+            font-size: 2em;
+        }
+
+        .stream-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 25px;
             margin: 30px 0;
-        }}
+        }
 
-        .platform-card {{
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white;
-            padding: 20px;
+        .stream-card {
+            background: #222;
             border-radius: 15px;
-            text-align: center;
+            overflow: hidden;
             cursor: pointer;
             transition: all 0.3s;
-            border: 3px solid transparent;
-        }}
+            border: 1px solid #333;
+        }
 
-        .platform-card:hover {{
-            transform: scale(1.05);
-            border-color: white;
-        }}
+        .stream-card:hover {
+            transform: translateY(-10px);
+            border-color: #ff3366;
+        }
 
-        .platform-card h3 {{
-            font-size: 1.5em;
-            margin-bottom: 10px;
-        }}
-
-        .platform-card .key-preview {{
-            font-family: 'Courier New', monospace;
-            font-size: 0.9em;
-            background: rgba(0,0,0,0.3);
-            padding: 10px;
-            border-radius: 5px;
-            margin-top: 10px;
-        }}
-
-        .obs-guide {{
-            background: white;
-            border-radius: 20px;
-            padding: 40px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }}
-
-        .obs-guide h2 {{
-            color: #2c3e50;
-            margin-bottom: 30px;
-            font-size: 2em;
-            border-bottom: 3px solid #00ff88;
-            padding-bottom: 10px;
-        }}
-
-        .steps {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 30px;
-        }}
-
-        .step {{
-            text-align: center;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 15px;
-            transition: all 0.3s;
-        }}
-
-        .step:hover {{
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-        }}
-
-        .step-number {{
-            width: 50px;
-            height: 50px;
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white;
-            border-radius: 50%;
+        .stream-preview {
+            height: 180px;
+            background: linear-gradient(45deg, #ff3366, #ff8c00);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.5em;
+            position: relative;
+        }
+
+        .preview-placeholder {
+            font-size: 4em;
+        }
+
+        .live-badge {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: #ff3366;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 0.8em;
             font-weight: bold;
-            margin: 0 auto 20px;
-        }}
+        }
 
-        .step h3 {{
-            color: #2c3e50;
-            margin-bottom: 15px;
-        }}
+        .viewer-count {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
 
-        .step p {{
-            color: #666;
-            line-height: 1.6;
-        }}
-
-        .server-list {{
-            margin-top: 30px;
+        .stream-info {
             padding: 20px;
-            background: #f0f0f0;
-            border-radius: 10px;
-        }}
+        }
 
-        .server-item {{
+        .stream-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .streamer-name {
+            color: #ff3366;
+            margin-bottom: 5px;
+        }
+
+        .stream-category {
+            color: #999;
+            font-size: 0.9em;
+        }
+
+        .stream-player {
+            max-width: 1200px;
+        }
+
+        .video-container {
+            width: 100%;
+            height: 400px;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .video-placeholder {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #1a1a1a, #222);
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid #333;
+            border-top: 3px solid #ff3366;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .stream-info-bar {
             display: flex;
             justify-content: space-between;
-            padding: 10px;
-            border-bottom: 1px solid #ddd;
-        }}
+            align-items: center;
+            padding: 15px;
+            background: #222;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
 
-        .server-item:last-child {{
-            border-bottom: none;
-        }}
+        .viewer-stats {
+            background: #ff3366;
+            padding: 8px 15px;
+            border-radius: 20px;
+        }
 
-        .server-name {{
+        .chat-container {
+            background: #1a1a1a;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .chat-messages {
+            height: 200px;
+            overflow-y: auto;
+            padding: 15px;
+        }
+
+        .chat-message {
+            margin: 10px 0;
+            color: #ccc;
+        }
+
+        .chat-message.system {
+            color: #ff3366;
+        }
+
+        .chat-message .time {
+            color: #666;
+            font-size: 0.8em;
+            margin-right: 10px;
+        }
+
+        .chat-message .username {
+            color: #ff3366;
             font-weight: bold;
-            color: #2c3e50;
-        }}
+            margin-right: 10px;
+        }
 
-        .server-url {{
-            color: #667eea;
-            font-family: 'Courier New', monospace;
-        }}
+        .chat-input {
+            display: flex;
+            padding: 15px;
+            background: #222;
+        }
 
-        .footer {{
-            text-align: center;
+        .chat-input input {
+            flex: 1;
+            padding: 10px;
+            background: #333;
+            border: 1px solid #444;
+            border-radius: 5px 0 0 5px;
             color: white;
-            padding: 40px 20px;
-        }}
+        }
 
-        .notification {{
+        .chat-input button {
+            padding: 10px 20px;
+            background: #ff3366;
+            color: white;
+            border: none;
+            border-radius: 0 5px 5px 0;
+            cursor: pointer;
+        }
+
+        .notification {
             position: fixed;
-            top: 20px;
-            right: 20px;
-            background: #00ff88;
-            color: #2c3e50;
+            bottom: 30px;
+            right: 30px;
+            background: #ff3366;
+            color: white;
             padding: 15px 25px;
             border-radius: 10px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
             transform: translateX(400px);
             transition: transform 0.3s;
             z-index: 1000;
-        }}
+        }
 
-        .notification.show {{
+        .notification.show {
             transform: translateX(0);
-        }}
+        }
 
-        .custom-key-section {{
-            margin-top: 30px;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 15px;
-        }}
+        .footer {
+            text-align: center;
+            padding: 40px;
+            border-top: 1px solid #333;
+            margin-top: 50px;
+            color: #666;
+        }
 
-        .custom-input {{
-            width: 100%;
-            padding: 15px;
-            font-size: 1.1em;
-            border: 2px solid #ddd;
-            border-radius: 10px;
-            margin: 15px 0;
-            font-family: 'Courier New', monospace;
-        }}
+        .timestamp {
+            font-size: 0.8em;
+            margin-top: 10px;
+        }
 
-        .generate-btn {{
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white;
-            border: none;
-            padding: 15px 30px;
-            font-size: 1.1em;
-            border-radius: 10px;
-            cursor: pointer;
-            transition: all 0.3s;
-            width: 100%;
-        }}
-
-        .generate-btn:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102,126,234,0.4);
-        }}
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 1.8em;
+            }
+            
+            .modal-content {
+                width: 95%;
+                padding: 20px;
+            }
+            
+            .video-container {
+                height: 250px;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🎥 StreamMaster Pro</h1>
-            <p>Generiere sichere Stream-Keys und erfahre, wie du mit OBS streamst</p>
-            <p style="font-size: 0.9em; margin-top: 10px;">Generiert am: {datetime.now().strftime('%d.%m.%Y %H:%M')}</p>
-        </div>
-
-        <div class="generator-box">
-            <h2 style="color: #2c3e50; margin-bottom: 20px;">Stream-Key Generator</h2>
-            
-            <div class="key-display">
-                <h3 style="color: #2c3e50; margin-bottom: 15px;">Dein aktueller Stream-Key:</h3>
-                <div class="key-box" id="currentKey">{twitch_key}</div>
-                <button class="copy-btn" onclick="copyToClipboard()">📋 Key kopieren</button>
-            </div>
-
-            <h3 style="color: #2c3e50; margin-bottom: 15px;">Wähle eine Plattform:</h3>
-            <div class="platform-grid">
-                <div class="platform-card" onclick="setKey('{twitch_key}')">
-                    <h3>Twitch</h3>
-                    <p>live_**********</p>
-                    <div class="key-preview">{twitch_key[:20]}...</div>
-                </div>
-                <div class="platform-card" onclick="setKey('{youtube_key}')">
-                    <h3>YouTube</h3>
-                    <p>yt_**********</p>
-                    <div class="key-preview">{youtube_key[:20]}...</div>
-                </div>
-                <div class="platform-card" onclick="setKey('{facebook_key}')">
-                    <h3>Facebook</h3>
-                    <p>fb_**********</p>
-                    <div class="key-preview">{facebook_key[:20]}...</div>
-                </div>
-                <div class="platform-card" onclick="generateCustomKey()">
-                    <h3>Custom</h3>
-                    <p>🔑 Neu generieren</p>
-                    <div class="key-preview">Klicken für neuen Key</div>
-                </div>
-            </div>
-
-            <div class="custom-key-section">
-                <h3 style="color: #2c3e50; margin-bottom: 10px;">Custom Key Generator</h3>
-                <input type="number" id="keyLength" class="custom-input" placeholder="Key-Länge (z.B. 30)" min="20" max="50" value="30">
-                <button class="generate-btn" onclick="generateCustomKey()">🔑 Neuen Custom Key generieren</button>
-            </div>
-        </div>
-
-        <div class="obs-guide">
-            <h2>📺 OBS Studio Setup Guide</h2>
-            
-            <div class="steps">
-                <div class="step">
-                    <div class="step-number">1</div>
-                    <h3>OBS installieren</h3>
-                    <p>Lade OBS Studio von obsproject.com herunter und installiere es</p>
-                </div>
-                <div class="step">
-                    <div class="step-number">2</div>
-                    <h3>Quellen hinzufügen</h3>
-                    <p>Füge Display Capture, Window Capture oder Video Capture Device hinzu</p>
-                </div>
-                <div class="step">
-                    <div class="step-number">3</div>
-                    <h3>Stream-Key eingeben</h3>
-                    <p>Gehe zu Einstellungen > Stream > Stream-Key und füge deinen Key ein</p>
-                </div>
-                <div class="step">
-                    <div class="step-number">4</div>
-                    <h3>Stream starten</h3>
-                    <p>Klicke auf "Stream starten" und du bist live!</p>
-                </div>
-            </div>
-
-            <div class="server-list">
-                <h3 style="color: #2c3e50; margin-bottom: 20px;">🌍 Streaming Server URLs</h3>
-                <div class="server-item">
-                    <span class="server-name">Twitch</span>
-                    <span class="server-url">rtmp://live.twitch.tv/app/</span>
-                </div>
-                <div class="server-item">
-                    <span class="server-name">YouTube</span>
-                    <span class="server-url">rtmp://a.rtmp.youtube.com/live2</span>
-                </div>
-                <div class="server-item">
-                    <span class="server-name">Facebook</span>
-                    <span class="server-url">rtmps://live-api-s.facebook.com:443/rtmp/</span>
-                </div>
-                <div class="server-item">
-                    <span class="server-name">Restream.io</span>
-                    <span class="server-url">rtmp://live.restream.io/live</span>
-                </div>
-            </div>
-
-            <div style="margin-top: 30px; padding: 20px; background: #e8f4fd; border-radius: 10px;">
-                <h3 style="color: #2c3e50; margin-bottom: 15px;">⚡ Pro-Tipps für OBS:</h3>
-                <ul style="color: #666; line-height: 1.8; margin-left: 20px;">
-                    <li>Video-Bitrate: 2500-6000 Kbps für 1080p</li>
-                    <li>Audio-Bitrate: 160 Kbps</li>
-                    <li>Encoder: Hardware (NVENC) wenn verfügbar</li>
-                    <li>Keyframe-Intervall: 2 Sekunden</li>
-                    <li>Auflösung: 1920x1080 oder 1280x720</li>
-                </ul>
-            </div>
-        </div>
-
-        <div class="footer">
-            <p>StreamMaster Pro - Dein professioneller Stream-Key Generator</p>
-            <p style="font-size: 0.8em; margin-top: 10px;">🔒 Alle Keys werden lokal in deinem Browser generiert</p>
+    <div class="navbar">
+        <a href="/" class="logo">🔴 StreamHub</a>
+        <div class="nav-links">
+            <a href="/">Home</a>
+            <a href="#" class="live-badge" id="liveCount">🔴 LIVE (0)</a>
+            <a href="#" onclick="showGenerator()">Key Generator</a>
         </div>
     </div>
 
-    <div class="notification" id="notification">
-        ✅ Stream-Key wurde kopiert!
+    <div class="container">
+        <div class="hero">
+            <h1>StreamHub - Anonyme Streaming-Plattform</h1>
+            <p>Generiere sichere Stream-Keys und starte sofort mit OBS</p>
+            <div class="server-info">
+                <strong>RTMP Server:</strong> 
+                <code id="rtmpUrl">{{ rtmp_url }}</code>
+                <button class="copy-btn-small" onclick="copyRtmpUrl()">📋</button>
+            </div>
+        </div>
+
+        <!-- Key Generator Modal -->
+        <div class="modal" id="keyGeneratorModal">
+            <div class="modal-content">
+                <span class="close" onclick="closeGenerator()">&times;</span>
+                <h2>🔑 Stream-Key Generator</h2>
+                
+                <div class="form-group">
+                    <label>Dein Name:</label>
+                    <input type="text" id="username" placeholder="Anonymous" value="Streamer_{{ range(100, 999) | random }}">
+                </div>
+                
+                <div class="form-group">
+                    <label>Stream-Titel:</label>
+                    <input type="text" id="title" placeholder="Mein Stream" value="Mein Live Stream">
+                </div>
+                
+                <div class="form-group">
+                    <label>Kategorie:</label>
+                    <select id="category">
+                        <option>Just Chatting</option>
+                        <option>Gaming</option>
+                        <option>Music</option>
+                        <option>Creative</option>
+                        <option>Sports</option>
+                    </select>
+                </div>
+                
+                <button class="generate-btn" onclick="generateKey()">🔑 Key generieren</button>
+                
+                <div class="key-result" id="keyResult" style="display: none;">
+                    <h3>Dein Stream-Key:</h3>
+                    <div class="key-box" id="generatedKey"></div>
+                    <button class="copy-btn" onclick="copyKey()">📋 Key kopieren</button>
+                    
+                    <div class="obs-info">
+                        <h4>📺 OBS Einstellungen:</h4>
+                        <p><strong>Server:</strong> <code id="obsServer">{{ rtmp_url }}</code></p>
+                        <p><strong>Stream-Key:</strong> <code id="obsKey"></code></p>
+                    </div>
+                    
+                    <button class="start-stream-btn" onclick="startStream()">🔴 Stream starten</button>
+                </div>
+            </div>
+        </div>
+
+        <h2 class="section-title">🔴 Live jetzt</h2>
+        <div class="stream-grid" id="streamGrid">
+            {% for stream in streams %}
+            <div class="stream-card" onclick="openStream('{{ stream.id }}')">
+                <div class="stream-preview">
+                    <div class="preview-placeholder">
+                        {% if stream.category == 'Gaming' %}🎮
+                        {% elif stream.category == 'Music' %}🎵
+                        {% elif stream.category == 'Tech' %}💻
+                        {% else %}📺{% endif %}
+                    </div>
+                    <span class="live-badge">LIVE</span>
+                    <span class="viewer-count">👥 {{ stream.viewers }}</span>
+                </div>
+                <div class="stream-info">
+                    <div class="stream-title">{{ stream.title }}</div>
+                    <div class="streamer-name">👤 {{ stream.username }}</div>
+                    <div class="stream-category">{{ stream.category }}</div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Stream Player Modal -->
+        <div class="modal" id="streamModal">
+            <div class="modal-content stream-player">
+                <span class="close" onclick="closeStream()">&times;</span>
+                
+                <div class="video-container">
+                    <div class="video-placeholder" id="videoPlaceholder">
+                        <div class="spinner"></div>
+                        <h3>Stream wird geladen...</h3>
+                        <p>Warte auf Stream-Signal</p>
+                    </div>
+                </div>
+                
+                <div class="stream-info-bar">
+                    <div class="stream-details" id="streamDetails">
+                        <h3 id="streamTitle"></h3>
+                        <p id="streamerName"></p>
+                    </div>
+                    <div class="viewer-stats" id="viewerStats">
+                        👥 <span id="viewerCount">0</span> Zuschauer
+                    </div>
+                </div>
+                
+                <div class="chat-container">
+                    <div class="chat-messages" id="chatMessages">
+                        <div class="chat-message system">
+                            <span class="time">System:</span> Willkommen im Stream!
+                        </div>
+                    </div>
+                    
+                    <div class="chat-input">
+                        <input type="text" id="chatInput" placeholder="Chat als Anonymous...">
+                        <button onclick="sendChat()">📨</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="notification" id="notification"></div>
+    </div>
+
+    <div class="footer">
+        <p>© 2024 StreamHub - Anonyme Streaming-Plattform</p>
+        <p class="timestamp">Generiert: {{ current_time }}</p>
     </div>
 
     <script>
-        function generateCustomKey() {{
-            const length = document.getElementById('keyLength').value || 30;
-            const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-            let key = 'custom_';
+        let currentStreamId = null;
+        let currentStreamKey = null;
+        
+        function showGenerator() {
+            document.getElementById('keyGeneratorModal').style.display = 'block';
+        }
+        
+        function closeGenerator() {
+            document.getElementById('keyGeneratorModal').style.display = 'none';
+        }
+        
+        function copyRtmpUrl() {
+            const url = document.getElementById('rtmpUrl').textContent;
+            navigator.clipboard.writeText(url);
+            showNotification('✅ RTMP URL kopiert!');
+        }
+        
+        async function generateKey() {
+            const username = document.getElementById('username').value;
+            const title = document.getElementById('title').value;
+            const category = document.getElementById('category').value;
             
-            for (let i = 0; i < length; i++) {{
-                key += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
-            }}
+            const response = await fetch('/api/generate_key', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, title, category})
+            });
             
-            document.getElementById('currentKey').textContent = key;
-            showNotification('✅ Neuer Custom Key wurde generiert!');
-        }}
-
-        function setKey(key) {{
-            document.getElementById('currentKey').textContent = key;
-            showNotification('✅ Plattform-Key wurde geladen!');
-        }}
-
-        function copyToClipboard() {{
-            const keyText = document.getElementById('currentKey').textContent;
-            navigator.clipboard.writeText(keyText).then(function() {{
-                showNotification('✅ Stream-Key wurde kopiert!');
-            }}, function(err) {{
-                alert('Fehler beim Kopieren: ' + err);
-            }});
-        }}
-
-        function showNotification(message) {{
+            const data = await response.json();
+            
+            if (data.success) {
+                currentStreamKey = data.stream_key;
+                document.getElementById('generatedKey').textContent = data.stream_key;
+                document.getElementById('obsKey').textContent = data.stream_key;
+                document.getElementById('obsServer').textContent = data.rtmp_url;
+                document.getElementById('keyResult').style.display = 'block';
+                showNotification('✅ Key generiert!');
+            }
+        }
+        
+        function copyKey() {
+            const key = document.getElementById('generatedKey').textContent;
+            navigator.clipboard.writeText(key);
+            showNotification('✅ Key kopiert!');
+        }
+        
+        async function startStream() {
+            if (!currentStreamKey) return;
+            
+            // Hier Stream als live markieren
+            showNotification('🔴 Stream ist bereit! Starte OBS...');
+            closeGenerator();
+            
+            // Simuliere neuen Stream in der Grid
+            addStreamToGrid();
+        }
+        
+        function addStreamToGrid() {
+            const username = document.getElementById('username').value;
+            const title = document.getElementById('title').value;
+            const category = document.getElementById('category').value;
+            
+            const grid = document.getElementById('streamGrid');
+            const newCard = document.createElement('div');
+            newCard.className = 'stream-card';
+            newCard.innerHTML = `
+                <div class="stream-preview">
+                    <div class="preview-placeholder">🔴</div>
+                    <span class="live-badge">LIVE</span>
+                    <span class="viewer-count">👥 0</span>
+                </div>
+                <div class="stream-info">
+                    <div class="stream-title">${title}</div>
+                    <div class="streamer-name">👤 ${username}</div>
+                    <div class="stream-category">${category}</div>
+                </div>
+            `;
+            
+            grid.prepend(newCard);
+        }
+        
+        function openStream(streamId) {
+            currentStreamId = streamId;
+            document.getElementById('streamModal').style.display = 'block';
+            
+            // Simuliere Stream-Details
+            document.getElementById('streamTitle').textContent = 'Live Stream';
+            document.getElementById('streamerName').textContent = 'Streamer';
+            
+            // Starte Zuschauer-Simulation
+            startViewerSimulation();
+        }
+        
+        function closeStream() {
+            document.getElementById('streamModal').style.display = 'none';
+        }
+        
+        function startViewerSimulation() {
+            let viewers = 0;
+            setInterval(() => {
+                viewers += Math.floor(Math.random() * 3);
+                document.getElementById('viewerCount').textContent = viewers;
+            }, 5000);
+        }
+        
+        function sendChat() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            
+            if (message) {
+                const chatMessages = document.getElementById('chatMessages');
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'chat-message';
+                msgDiv.innerHTML = `<span class="username">Anonymous:</span> ${message}`;
+                chatMessages.appendChild(msgDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                input.value = '';
+            }
+        }
+        
+        function showNotification(message) {
             const notification = document.getElementById('notification');
             notification.textContent = message;
             notification.classList.add('show');
             
-            setTimeout(() => {{
+            setTimeout(() => {
                 notification.classList.remove('show');
-            }}, 3000);
-        }}
-
-        // Tastatur-Shortcut für Kopieren (Strg+K)
-        document.addEventListener('keydown', function(e) {{
-            if (e.ctrlKey && e.key === 'k') {{
-                e.preventDefault();
-                copyToClipboard();
-            }}
-        }});
+            }, 3000);
+        }
+        
+        // Chat-Enter-Taste
+        document.getElementById('chatInput')?.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendChat();
+            }
+        });
+        
+        // Live-Count aktualisieren
+        setInterval(() => {
+            const cards = document.querySelectorAll('.stream-card').length;
+            document.getElementById('liveCount').textContent = `🔴 LIVE (${cards})`;
+        }, 5000);
     </script>
 </body>
-</html>'''
-    
-    def save_and_open(self, filename="stream_key_generator.html"):
-        """Speichert die HTML-Datei und öffnet sie im Browser"""
-        
-        # HTML-Datei speichern
-        with open(filename, 'w', encoding='utf-8') as f:
-            f.write(self.html_content)
-        
-        # Absoluten Pfad holen
-        absolute_path = os.path.abspath(filename)
-        
-        print(f"\n✅ Stream-Key Generator wurde erstellt!")
-        print(f"📁 Datei gespeichert unter: {absolute_path}")
-        print(f"🌐 Öffne im Browser...\n")
-        
-        # Im Standard-Browser öffnen
-        webbrowser.open(f'file://{absolute_path}')
-        
-        return absolute_path
-    
-    def print_instructions(self):
-        """Zeigt zusätzliche Anweisungen an"""
-        print("="*60)
-        print("📺 STREAM-KEY GENERATOR - ANLEITUNG")
-        print("="*60)
-        print("""
-1️⃣  Die Website wurde in deinem Browser geöffnet
-2️⃣  Wähle eine Plattform (Twitch, YouTube, Facebook)
-3️⃣  Kopiere den generierten Key mit einem Klick
-4️⃣  Öffne OBS Studio
-5️⃣  Gehe zu: Einstellungen > Stream
-6️⃣  Wähle deinen Streaming-Dienst
-7️⃣  Füge den Stream-Key ein
-8️⃣  Starte deinen Stream!
+</html>
+'''
 
-📌 WICHTIG:
-- Teile deinen Stream-Key mit niemandem!
-- Generiere bei Verdacht auf Missbrauch einen neuen Key
-- Jede Plattform hat eigene Server-URLs (in der Website aufgelistet)
+@app.route('/')
+def index():
+    """Hauptseite"""
+    demo_streams = []
+    for i in range(3):
+        username = f"Streamer{i+1}"
+        stream_data = {
+            "id": str(uuid.uuid4())[:8],
+            "username": username,
+            "title": f"{username}'s Live Stream",
+            "category": ["Gaming", "Music", "Tech"][i],
+            "viewers": secrets.randbelow(1000) + 100
+        }
+        demo_streams.append(stream_data)
+    
+    return render_template_string(
+        HTML_TEMPLATE,
+        streams=demo_streams,
+        current_time=datetime.now().strftime('%d.%m.%Y %H:%M'),
+        rtmp_url=StreamHub.get_rtmp_url()
+    )
 
-🎮 VIEL ERFOLG BEIM STREAMEN!
-        """)
-        print("="*60)
+@app.route('/api/generate_key', methods=['POST'])
+def generate_key():
+    """API-Endpunkt für Stream-Keys"""
+    data = request.json
+    username = data.get('username', 'Anonymous')
+    title = data.get('title', 'Mein Stream')
+    category = data.get('category', 'Just Chatting')
+    
+    stream_key, stream_id = StreamHub.generate_stream_key(username)
+    
+    streams[stream_id]['title'] = title
+    streams[stream_id]['category'] = category
+    
+    return jsonify({
+        'success': True,
+        'stream_key': stream_key,
+        'stream_id': stream_id,
+        'rtmp_url': StreamHub.get_rtmp_url(),
+        'message': 'Stream-Key erfolgreich generiert!'
+    })
 
-def main():
-    """Hauptfunktion"""
-    print("🎬 StreamMaster Pro - Stream-Key Generator wird gestartet...")
+@app.route('/api/streams')
+def get_streams():
+    """API für aktive Streams"""
+    active_streams = []
+    for sid, stream in streams.items():
+        if stream.get('active', False):
+            active_streams.append({
+                'id': sid,
+                'username': stream['username'],
+                'title': stream['title'],
+                'category': stream['category'],
+                'viewers': stream['viewers']
+            })
     
-    # Generator erstellen
-    generator = StreamKeyWebsite()
-    
-    # HTML erstellen
-    generator.create_html()
-    
-    # Speichern und öffnen
-    generator.save_and_open()
-    
-    # Anleitung zeigen
-    generator.print_instructions()
+    return jsonify({
+        'success': True,
+        'streams': active_streams,
+        'count': len(active_streams)
+    })
 
-if __name__ == "__main__":
-    main()
+@app.route('/api/stream/<stream_id>')
+def get_stream(stream_id):
+    """API für einzelnen Stream"""
+    if stream_id in streams:
+        stream = streams[stream_id]
+        stream['viewers'] += 1
+        return jsonify({
+            'success': True,
+            'stream': {
+                'id': stream_id,
+                'username': stream['username'],
+                'title': stream['title'],
+                'category': stream['category'],
+                'viewers': stream['viewers'],
+                'created': stream['created']
+            }
+        })
+    
+    return jsonify({'success': False, 'error': 'Stream nicht gefunden'}), 404
+
+@app.route('/api/stream/<stream_id>/start', methods=['POST'])
+def start_stream(stream_id):
+    """Stream starten"""
+    if stream_id in streams:
+        streams[stream_id]['active'] = True
+        streams[stream_id]['viewers'] = 0
+        return jsonify({'success': True, 'message': 'Stream gestartet!'})
+    
+    return jsonify({'success': False, 'error': 'Stream nicht gefunden'}), 404
+
+@app.route('/health')
+def health():
+    """Health Check für Railway"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'streams': len(streams)
+    })
+
+# Für lokale Entwicklung
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
