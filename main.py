@@ -1,10 +1,32 @@
+#!/usr/bin/env python3
+"""
+StreamHub - All-in-One Streaming Plattform
+Starte mit: python streamhub.py
+"""
+
+import subprocess
+import sys
 import os
 import secrets
 import string
 import uuid
-import json
 from datetime import datetime
-from flask import Flask, render_template_string, jsonify, request
+
+# Automatische Installation von fehlenden Paketen
+def install_package(package):
+    """Installiert ein Python-Paket automatisch"""
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# Prüfe ob Flask installiert ist, wenn nicht -> installieren
+try:
+    from flask import Flask, render_template_string, jsonify, request
+    print("✅ Flask bereits installiert")
+except ImportError:
+    print("📦 Installiere Flask...")
+    install_package('flask')
+    install_package('gunicorn')
+    from flask import Flask, render_template_string, jsonify, request
+    print("✅ Flask wurde installiert!")
 
 # Flask App initialisieren
 app = Flask(__name__)
@@ -13,7 +35,6 @@ app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 # In-Memory Speicher
 streams = {}
 stream_keys = {}
-active_viewers = {}
 
 class StreamHub:
     @staticmethod
@@ -43,10 +64,11 @@ class StreamHub:
     
     @staticmethod
     def get_rtmp_url():
+        """Gibt die RTMP-URL zurück"""
         railway_url = os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'localhost')
         return f"rtmp://{railway_url}/live"
 
-# HTML Template (All-in-One)
+# HTML Template
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="de">
@@ -130,6 +152,11 @@ HTML_TEMPLATE = '''
             margin-bottom: 20px;
         }
 
+        .hero p {
+            font-size: 1.2em;
+            margin-bottom: 20px;
+        }
+
         .server-info {
             background: rgba(0,0,0,0.3);
             padding: 15px;
@@ -153,6 +180,28 @@ HTML_TEMPLATE = '''
             padding: 5px 10px;
             border-radius: 5px;
             cursor: pointer;
+        }
+
+        .copy-btn-small:hover {
+            background: #ff1a4f;
+        }
+
+        .button-primary {
+            background: #ff3366;
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 1.2em;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
+            margin: 20px 0;
+        }
+
+        .button-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(255,51,102,0.4);
         }
 
         .modal {
@@ -186,6 +235,10 @@ HTML_TEMPLATE = '''
             cursor: pointer;
         }
 
+        .close:hover {
+            color: #ff1a4f;
+        }
+
         .form-group {
             margin: 20px 0;
         }
@@ -194,6 +247,7 @@ HTML_TEMPLATE = '''
             display: block;
             margin-bottom: 8px;
             color: #ff3366;
+            font-weight: bold;
         }
 
         .form-group input, .form-group select {
@@ -206,6 +260,11 @@ HTML_TEMPLATE = '''
             font-size: 1em;
         }
 
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #ff3366;
+        }
+
         .generate-btn {
             width: 100%;
             padding: 15px;
@@ -216,11 +275,11 @@ HTML_TEMPLATE = '''
             font-size: 1.2em;
             cursor: pointer;
             margin: 20px 0;
+            font-weight: bold;
         }
 
         .generate-btn:hover {
             background: #ff1a4f;
-            transform: translateY(-2px);
         }
 
         .key-result {
@@ -250,6 +309,11 @@ HTML_TEMPLATE = '''
             border-radius: 5px;
             cursor: pointer;
             font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .copy-btn:hover {
+            background: #00cc66;
         }
 
         .obs-info {
@@ -278,6 +342,10 @@ HTML_TEMPLATE = '''
             cursor: pointer;
         }
 
+        .start-stream-btn:hover {
+            background: #00cc66;
+        }
+
         .section-title {
             margin: 40px 0 20px;
             font-size: 2em;
@@ -302,6 +370,7 @@ HTML_TEMPLATE = '''
         .stream-card:hover {
             transform: translateY(-10px);
             border-color: #ff3366;
+            box-shadow: 0 10px 30px rgba(255,51,102,0.2);
         }
 
         .stream-preview {
@@ -326,6 +395,7 @@ HTML_TEMPLATE = '''
             border-radius: 5px;
             font-size: 0.8em;
             font-weight: bold;
+            animation: pulse 1.5s infinite;
         }
 
         .viewer-count {
@@ -459,6 +529,11 @@ HTML_TEMPLATE = '''
             color: white;
         }
 
+        .chat-input input:focus {
+            outline: none;
+            border-color: #ff3366;
+        }
+
         .chat-input button {
             padding: 10px 20px;
             background: #ff3366;
@@ -466,6 +541,10 @@ HTML_TEMPLATE = '''
             border: none;
             border-radius: 0 5px 5px 0;
             cursor: pointer;
+        }
+
+        .chat-input button:hover {
+            background: #ff1a4f;
         }
 
         .notification {
@@ -476,6 +555,7 @@ HTML_TEMPLATE = '''
             color: white;
             padding: 15px 25px;
             border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(255,51,102,0.3);
             transform: translateX(400px);
             transition: transform 0.3s;
             z-index: 1000;
@@ -520,7 +600,7 @@ HTML_TEMPLATE = '''
         <div class="nav-links">
             <a href="/">Home</a>
             <a href="#" class="live-badge" id="liveCount">🔴 LIVE (0)</a>
-            <a href="#" onclick="showGenerator()">Key Generator</a>
+            <a href="#" onclick="showGenerator()">🔑 Key Generator</a>
         </div>
     </div>
 
@@ -528,10 +608,11 @@ HTML_TEMPLATE = '''
         <div class="hero">
             <h1>StreamHub - Anonyme Streaming-Plattform</h1>
             <p>Generiere sichere Stream-Keys und starte sofort mit OBS</p>
+            <button class="button-primary" onclick="showGenerator()">🔑 Stream-Key generieren</button>
             <div class="server-info">
                 <strong>RTMP Server:</strong> 
                 <code id="rtmpUrl">{{ rtmp_url }}</code>
-                <button class="copy-btn-small" onclick="copyRtmpUrl()">📋</button>
+                <button class="copy-btn-small" onclick="copyRtmpUrl()">📋 Kopieren</button>
             </div>
         </div>
 
@@ -696,22 +777,19 @@ HTML_TEMPLATE = '''
             showNotification('✅ Key kopiert!');
         }
         
-        async function startStream() {
+        function startStream() {
             if (!currentStreamKey) return;
             
-            // Hier Stream als live markieren
-            showNotification('🔴 Stream ist bereit! Starte OBS...');
-            closeGenerator();
-            
-            // Simuliere neuen Stream in der Grid
-            addStreamToGrid();
-        }
-        
-        function addStreamToGrid() {
             const username = document.getElementById('username').value;
             const title = document.getElementById('title').value;
             const category = document.getElementById('category').value;
             
+            addStreamToGrid(username, title, category);
+            showNotification('🔴 Stream ist bereit! Starte OBS...');
+            closeGenerator();
+        }
+        
+        function addStreamToGrid(username, title, category) {
             const grid = document.getElementById('streamGrid');
             const newCard = document.createElement('div');
             newCard.className = 'stream-card';
@@ -729,17 +807,16 @@ HTML_TEMPLATE = '''
             `;
             
             grid.prepend(newCard);
+            updateLiveCount();
         }
         
         function openStream(streamId) {
             currentStreamId = streamId;
             document.getElementById('streamModal').style.display = 'block';
             
-            // Simuliere Stream-Details
             document.getElementById('streamTitle').textContent = 'Live Stream';
             document.getElementById('streamerName').textContent = 'Streamer';
             
-            // Starte Zuschauer-Simulation
             startViewerSimulation();
         }
         
@@ -780,18 +857,18 @@ HTML_TEMPLATE = '''
             }, 3000);
         }
         
-        // Chat-Enter-Taste
+        function updateLiveCount() {
+            const cards = document.querySelectorAll('.stream-card').length;
+            document.getElementById('liveCount').textContent = `🔴 LIVE (${cards})`;
+        }
+        
         document.getElementById('chatInput')?.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 sendChat();
             }
         });
         
-        // Live-Count aktualisieren
-        setInterval(() => {
-            const cards = document.querySelectorAll('.stream-card').length;
-            document.getElementById('liveCount').textContent = `🔴 LIVE (${cards})`;
-        }, 5000);
+        setInterval(updateLiveCount, 5000);
     </script>
 </body>
 </html>
@@ -829,8 +906,9 @@ def generate_key():
     
     stream_key, stream_id = StreamHub.generate_stream_key(username)
     
-    streams[stream_id]['title'] = title
-    streams[stream_id]['category'] = category
+    if stream_id in streams:
+        streams[stream_id]['title'] = title
+        streams[stream_id]['category'] = category
     
     return jsonify({
         'success': True,
@@ -840,66 +918,25 @@ def generate_key():
         'message': 'Stream-Key erfolgreich generiert!'
     })
 
-@app.route('/api/streams')
-def get_streams():
-    """API für aktive Streams"""
-    active_streams = []
-    for sid, stream in streams.items():
-        if stream.get('active', False):
-            active_streams.append({
-                'id': sid,
-                'username': stream['username'],
-                'title': stream['title'],
-                'category': stream['category'],
-                'viewers': stream['viewers']
-            })
-    
-    return jsonify({
-        'success': True,
-        'streams': active_streams,
-        'count': len(active_streams)
-    })
-
-@app.route('/api/stream/<stream_id>')
-def get_stream(stream_id):
-    """API für einzelnen Stream"""
-    if stream_id in streams:
-        stream = streams[stream_id]
-        stream['viewers'] += 1
-        return jsonify({
-            'success': True,
-            'stream': {
-                'id': stream_id,
-                'username': stream['username'],
-                'title': stream['title'],
-                'category': stream['category'],
-                'viewers': stream['viewers'],
-                'created': stream['created']
-            }
-        })
-    
-    return jsonify({'success': False, 'error': 'Stream nicht gefunden'}), 404
-
-@app.route('/api/stream/<stream_id>/start', methods=['POST'])
-def start_stream(stream_id):
-    """Stream starten"""
-    if stream_id in streams:
-        streams[stream_id]['active'] = True
-        streams[stream_id]['viewers'] = 0
-        return jsonify({'success': True, 'message': 'Stream gestartet!'})
-    
-    return jsonify({'success': False, 'error': 'Stream nicht gefunden'}), 404
-
 @app.route('/health')
 def health():
-    """Health Check für Railway"""
+    """Health Check"""
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'streams': len(streams)
     })
 
-# Für lokale Entwicklung
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    print("="*60)
+    print("🎬 StreamHub - Anonyme Streaming-Plattform")
+    print("="*60)
+    print(f"📡 Server startet auf: http://localhost:{port}")
+    print(f"🔑 RTMP Server: {StreamHub.get_rtmp_url()}")
+    print(f"📅 Gestartet: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    print("="*60)
+    print("🌐 Öffne im Browser: http://localhost:5000")
+    print("="*60)
+    
     app.run(host='0.0.0.0', port=port, debug=True)
